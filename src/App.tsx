@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, FormEvent, TouchEvent } from 'react';
+import React, { useState, useRef, useEffect, FormEvent, TouchEvent, MouseEvent, WheelEvent } from 'react';
 import { INITIAL_REELS, MOCK_REEL_COMMENTS } from './data/reelsData';
 import { Reel, Comment, ShopItem, UserStats } from './types';
 import ReelPlayer from './components/ReelPlayer';
@@ -112,10 +112,18 @@ export default function App() {
   const [activeBet, setActiveBet] = useState(10);
   const [betFeePerSwipe, setBetFeePerSwipe] = useState(true);
 
-  // Comments feed panel toggle
-  const [showComments, setShowComments] = useState(false);
+  // Comments and Specials Drawers inside phone
+  const [showCommentsDrawer, setShowCommentsDrawer] = useState(false);
+  const [showSpecialsDrawer, setShowSpecialsDrawer] = useState(false);
   const [commentsList, setCommentsList] = useState<Comment[]>([]);
   const [newCommentInput, setNewCommentInput] = useState('');
+
+  // Swipe-Gamble Slot outcomes
+  const [swipeSpinActive, setSwipeSpinActive] = useState(false);
+  const [swipeReelsSymbols, setSwipeReelsSymbols] = useState<string[]>(['🎰', '🍒', '💎']);
+  const [swipeSpinPayout, setSwipeSpinPayout] = useState<number | null>(null);
+  const [swipeSpinMulti, setSwipeSpinMulti] = useState<number>(0);
+  const [swipeOutcomeMsg, setSwipeOutcomeMsg] = useState<string | null>(null);
 
   // Special mini game overlays
   const [lootBoxOpen, setLootBoxOpen] = useState(false);
@@ -216,10 +224,20 @@ export default function App() {
   const handleScrollReel = (direction: 'up' | 'down') => {
     playSwipe();
     
-    // Deduct sweep-fee gamble if toggled
+    // Determine next index first
+    let nextIdx = currentIdx;
+    if (direction === 'down') {
+      nextIdx = (currentIdx + 1) % reels.length;
+    } else {
+      nextIdx = (currentIdx - 1 + reels.length) % reels.length;
+    }
+
     let nextBalance = stats.balance;
     let betsCount = stats.totalBets;
+    let winsCount = stats.totalWins;
+    let highestPayout = stats.highestWin;
 
+    // Deduct sweep-fee gamble if toggled
     if (betFeePerSwipe) {
       if (stats.balance < activeBet) {
         spawnFloatingText('🚫 Insufficient Balance to swipe-bet!');
@@ -228,57 +246,154 @@ export default function App() {
       nextBalance -= activeBet;
       betsCount += 1;
       
-      // Attempt casual auto slot spin on swipe!
-      const randomWinRatio = Math.random() * getUpgradeLuck();
-      if (randomWinRatio > 0.82) {
-        const bonusScalar = Math.floor(Math.random() * currentReel.baseMultiplier) + 1;
-        const rewardSum = Math.round(activeBet * bonusScalar * getUpgradeMultiplier());
-        nextBalance += rewardSum;
-        playCoinSound();
-        spawnFloatingText(`Swipe Win: +$${rewardSum}! 🎰`);
+      // Slot Spin roll calculation on scroll
+      const SYMBOLS = ['🍇', '🍉', '🔔', '💎', '👑', '7️⃣', '🍋'];
+      const luck = getUpgradeLuck(); // e.g. luck is 1.12, 1.24, etc.
+      
+      const pickSymbol = () => {
+        const rand = Math.random() * 100;
+        // High luck raises premium symbols weight
+        if (rand < 6 * luck) return '7️⃣';
+        if (rand < 16 * luck) return '👑';
+        if (rand < 32 * luck) return '💎';
+        if (rand < 52) return '🔔';
+        if (rand < 72) return '🍉';
+        return '🍋';
+      };
+
+      const s1 = pickSymbol();
+      const s2 = pickSymbol();
+      const s3 = pickSymbol();
+      const rolled = [s1, s2, s3];
+      
+      setSwipeReelsSymbols(rolled);
+      setSwipeSpinActive(true);
+
+      let spinMultiplier = 0;
+      let label = 'No Win';
+
+      if (s1 === s2 && s2 === s3) {
+        if (s1 === '7️⃣') { spinMultiplier = 80; label = 'GRAND 777 JACKPOT!'; }
+        else if (s1 === '👑') { spinMultiplier = 40; label = 'ROYAL CROWN SPREE!'; }
+        else if (s1 === '💎') { spinMultiplier = 25; label = 'TRIPLE DIAMOND HEIST!'; }
+        else if (s1 === '🔔') { spinMultiplier = 15; label = 'GOLDEN BELL TRIPLE!'; }
+        else { spinMultiplier = 10; label = 'SUPER FRUIT SPLIT!'; }
+      } else if (s1 === s2 || s2 === s3 || s1 === s3) {
+        const matchingSym = (s1 === s2 || s1 === s3) ? s1 : s2;
+        if (matchingSym === '7️⃣' || matchingSym === '👑' || matchingSym === '💎') {
+          spinMultiplier = 4;
+          label = 'DOUBLE PREMIUM BONANZA!';
+        } else {
+          spinMultiplier = 2;
+          label = 'DOUBLE FRUIT COMBO!';
+        }
       } else {
+        const premiumCount = rolled.filter(s => s === '💎' || s === '👑').length;
+        if (premiumCount > 0) {
+          spinMultiplier = 1.5;
+          label = 'PREMIUM SCATTER PIECE!';
+        }
+      }
+
+      const rewardSum = Math.round(activeBet * spinMultiplier * getUpgradeMultiplier());
+      
+      if (rewardSum > 0) {
+        nextBalance += rewardSum;
+        winsCount += 1;
+        highestPayout = Math.max(highestPayout, rewardSum);
+        setSwipeSpinPayout(rewardSum);
+        setSwipeSpinMulti(spinMultiplier);
+        setSwipeOutcomeMsg(label);
+        playWin();
+        spawnFloatingText(`Swipe Result: +$${rewardSum}! 🎰`);
+      } else {
+        setSwipeSpinPayout(0);
+        setSwipeSpinMulti(0);
+        setSwipeOutcomeMsg('Bust! Better luck next swipe.');
         spawnFloatingText(`Swipe Bet: -$${activeBet}`);
       }
-    }
 
-    let nextIdx = currentIdx;
-    if (direction === 'down') {
-      nextIdx = (currentIdx + 1) % reels.length;
+      // Auto fade swipe container indicator card after 2.5 seconds
+      setTimeout(() => {
+        setSwipeSpinActive(false);
+      }, 2500);
+
     } else {
-      nextIdx = (currentIdx - 1 + reels.length) % reels.length;
+      setSwipeSpinActive(false);
     }
 
-    // Reset overlay elements
+    // Reset overlay elements inside smartphone drawers
     setLootBoxOpen(false);
     setLootReward(null);
     setDoubleDownActive(false);
     setDoubleStatus(null);
     setCoinSide(null);
+    setShowCommentsDrawer(false);
+    setShowSpecialsDrawer(false);
 
-    // Save final state
+    // Save final stats and increase XP
     setStats(prev => {
       const statsUpdated = {
         ...prev,
         balance: nextBalance,
-        totalBets: betsCount
+        totalBets: betsCount,
+        totalWins: winsCount,
+        highestWin: highestPayout
       };
-      return gainXP(8, statsUpdated); // swiping gains 8 XP points
+      return gainXP(8, statsUpdated); // vertical scrolling earns 8 XP points
     });
 
     setCurrentIdx(nextIdx);
   };
 
-  // Swipe Gestures
-  const handleTouchStart = (e: TouchEvent) => {
+  // Touch & Swipe Gestures with mouse Drag & Trackpad Wheel support
+  const dragStartY = useRef<number | null>(null);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
     touchStartY.current = e.touches[0].clientY;
   };
 
-  const handleTouchEnd = (e: TouchEvent) => {
+  const handleTouchEnd = (e: React.TouchEvent) => {
     const diff = touchStartY.current - e.changedTouches[0].clientY;
-    if (diff > 50) {
+    if (diff > 45) {
       handleScrollReel('down');
-    } else if (diff < -50) {
+    } else if (diff < -45) {
       handleScrollReel('up');
+    }
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    dragStartY.current = e.clientY;
+  };
+
+  const handleMouseUp = (e: React.MouseEvent) => {
+    if (dragStartY.current === null) return;
+    const diff = dragStartY.current - e.clientY;
+    dragStartY.current = null;
+    if (diff > 45) {
+      handleScrollReel('down');
+    } else if (diff < -45) {
+      handleScrollReel('up');
+    }
+  };
+
+  const handleMouseLeave = () => {
+    dragStartY.current = null;
+  };
+
+  const wheelLock = useRef<boolean>(false);
+  const handleWheel = (e: React.WheelEvent) => {
+    if (wheelLock.current) return;
+    if (Math.abs(e.deltaY) > 15) {
+      wheelLock.current = true;
+      if (e.deltaY > 0) {
+        handleScrollReel('down');
+      } else {
+        handleScrollReel('up');
+      }
+      setTimeout(() => {
+        wheelLock.current = false;
+      }, 600); // 600ms swipe rest
     }
   };
 
@@ -530,142 +645,241 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0c0118] text-white font-sans p-4 md:p-6 overflow-x-hidden antialiased relative">
+    <div className="min-h-screen bg-[#06020c] text-white font-sans overflow-x-hidden antialiased relative select-none">
       
-      {/* Mesh Gradient Background */}
+      {/* Real-time Frosted Glass Background Particles & Mesh Gradients */}
       <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-purple-600/30 rounded-full blur-[120px]"></div>
-        <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-blue-600/20 rounded-full blur-[120px]"></div>
-        <div className="absolute top-[20%] right-[10%] w-[30%] h-[40%] bg-pink-600/10 rounded-full blur-[100px]"></div>
+        <div className="absolute top-[-10%] left-[-5%] w-[60%] h-[50%] bg-purple-600/15 rounded-full blur-[140px] animate-pulse duration-10000"></div>
+        <div className="absolute bottom-[-10%] right-[-5%] w-[50%] h-[50%] bg-pink-600/10 rounded-full blur-[140px] animate-pulse duration-8000"></div>
+        <div className="absolute top-[20%] right-[20%] w-[35%] h-[45%] bg-blue-60%0/10 rounded-full blur-[120px]"></div>
       </div>
 
-      {/* Primary Container Frame Grid */}
-      <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6 relative z-10">
+      {/* ==================================================== */}
+      {/* HEADER: FROSTED GLASS TOP NAVIGATION BAR */}
+      {/* ==================================================== */}
+      <header className="sticky top-0 z-50 backdrop-blur-md bg-black/40 border-b border-white/10 px-4 md:px-8 py-3.5 flex items-center justify-between">
+        
+        {/* Brand Banner */}
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 bg-gradient-to-tr from-yellow-400 to-orange-500 rounded-lg flex items-center justify-center shadow-lg shadow-orange-500/20 text-slate-950 text-base font-black">
+            $
+          </div>
+          <div>
+            <span className="font-bold tracking-tight text-white font-mono block text-sm">LootReel</span>
+            <span className="text-[8px] text-white/50 tracking-wider uppercase font-mono block">Swipe Slot Simulator</span>
+          </div>
+        </div>
+
+        {/* Dynamic Nav Tabs */}
+        <nav className="hidden md:flex items-center gap-6 text-xs font-mono">
+          <button 
+            onClick={() => {
+              playTick(400, 0.05);
+              setCurrentIdx(0);
+            }}
+            className="text-white hover:text-yellow-400 py-1 border-b-2 border-yellow-400 font-bold transition-all"
+          >
+            🔥 For You
+          </button>
+          <button 
+            onClick={() => {
+              playTick(400, 0.05);
+              setCurrentIdx((currentIdx + 1) % reels.length);
+            }}
+            className="text-white/60 hover:text-white py-1 transition-all"
+          >
+            👥 Following
+          </button>
+          <div className="text-white/30 cursor-not-allowed py-1 flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+            <span className="text-white/50">LIVE WINS FEED</span>
+          </div>
+        </nav>
+
+        {/* Global Wallet Info Pill */}
+        <div className="flex items-center gap-3">
+          <div className="bg-white/5 border border-white/10 rounded-full py-1.5 px-3 flex items-center gap-2 text-xs font-mono shadow-inner backdrop-blur-lg">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+            <span className="text-white/60 text-[9px] font-bold">WALLET:</span>
+            <span className="text-emerald-400 font-black">${stats.balance.toLocaleString()}</span>
+          </div>
+          <button 
+            onClick={handleAddFreeCash}
+            className="hidden sm:flex bg-gradient-to-r from-yellow-400 to-orange-500 hover:from-yellow-300 hover:to-orange-400 active:scale-95 text-slate-950 text-[10px] font-mono font-black py-1.5 px-3.5 rounded-full transition-all shadow-md shadow-orange-500/10"
+          >
+            CLAIM GRANT
+          </button>
+        </div>
+
+      </header>
+
+      {/* ==================================================== */}
+      {/* MAIN CONTAINER: BALANCED 3-COLUMN LAYOUT */}
+      {/* ==================================================== */}
+      <main className="max-w-7xl mx-auto px-4 md:px-6 py-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-6 relative z-10">
         
         {/* ==================================================== */}
-        {/* LEFT COLUMN: THE CASINO TERMINAL & STORE (Lg: Col-4) */}
+        {/* LEFT COLUMN: BRAND ACCOUNT & SYSTEM GUIDE (Lg: Col-span-3) */}
         {/* ==================================================== */}
-        <div id="left-sidebar-terminal" className="lg:col-span-4 flex flex-col space-y-6">
+        <div id="left-sidebar-terminal" className="hidden lg:flex lg:col-span-3 flex-col space-y-6">
           
-          {/* Neon Title Branding */}
-          <div className="backdrop-blur-xl bg-white/5 border border-white/10 p-5 rounded-2xl flex items-center justify-between relative overflow-hidden shadow-2xl">
-            <div className="absolute inset-x-0 bottom-0 h-1 bg-gradient-to-r from-yellow-400 to-orange-500" />
+          {/* Detailed User Rank Progress */}
+          <div className="backdrop-blur-xl bg-white/5 border border-white/10 p-4 rounded-2xl shadow-2xl relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-24 h-24 bg-purple-500/10 rounded-full blur-2xl pointer-events-none" />
             
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-gradient-to-tr from-yellow-400 to-orange-500 rounded-xl flex items-center justify-center shadow-lg shadow-orange-500/20 text-white text-xl font-bold">
-                $
-              </div>
+            <h4 className="font-mono text-xs font-extrabold text-white/55 tracking-wider uppercase mb-3 flex items-center gap-1.5">
+              <UserCheck className="h-4 w-4 text-purple-400" /> CASINO STANDING
+            </h4>
+
+            <div className="space-y-4">
               <div>
-                <h1 className="text-lg font-bold tracking-tight text-white font-mono">LootReel</h1>
-                <p className="text-[10px] text-white/55 tracking-wider uppercase font-mono">SWIPE-BET AUDIO REELS</p>
+                <span className="text-[10px] text-white/40 font-mono block">SIMULATED LEVEL</span>
+                <span className="text-2xl font-black text-white font-mono tracking-tight">LEVEL {stats.level}</span>
+                <p className="text-[9px] text-purple-300 font-mono mt-0.5">
+                  {stats.level >= 10 ? '👑 Almighty Whale Sovereign' : '🎰 Cherry Spinner General'}
+                </p>
+              </div>
+
+              {/* Progress bar container */}
+              <div className="space-y-1">
+                <div className="flex justify-between items-baseline text-[9px] font-mono text-white/50">
+                  <span>EXP multiplier: {(stats.level * 10) + 10} XP</span>
+                  <span className="text-emerald-400">{stats.xp} XP</span>
+                </div>
+                <div className="w-full h-1.5 bg-black/40 rounded-full overflow-hidden border border-white/5">
+                  <div
+                    className="h-full bg-gradient-to-r from-purple-500 to-emerald-400 rounded-full transition-all duration-300"
+                    style={{ width: `${Math.min(100, Math.round((stats.xp / (stats.level * 100 + 50)) * 100))}%` }}
+                  />
+                </div>
               </div>
             </div>
-
-            <div className="text-right">
-              <span className="text-[10px] bg-amber-500/15 text-yellow-400 font-mono py-0.5 px-2 rounded-full border border-orange-500/20">
-                LIVE
-              </span>
-            </div>
           </div>
 
-          {/* User account wallet details and progress tracking */}
-          <WalletHeader 
-            stats={stats} 
-            onAddFreeCash={handleAddFreeCash} 
-            onResetGame={handleResetGame} 
-          />
-
-          {/* User Shop Upgrader block */}
-          <ShopPanel 
-            items={shopUpgrades} 
-            userBalance={stats.balance} 
-            onPurchase={handleUpgradePurchase} 
-          />
-
-          {/* Quick guide and instructional panel */}
-          <div className="backdrop-blur-xl bg-white/5 border border-white/10 p-4 rounded-2xl text-xs space-y-2 text-white/60 shadow-2xl">
-            <h5 className="font-mono text-white font-bold uppercase flex items-center gap-1.5 ">
-              <HelpCircle className="h-4 w-4 text-white/50" /> Swipe-Bet Guide
+          {/* Symmetrical Guide and How-To Check */}
+          <div className="backdrop-blur-xl bg-white/5 border border-white/10 p-4.5 rounded-2xl text-xs space-y-3 text-white/60 shadow-2xl">
+            <h5 className="font-mono text-white font-bold uppercase flex items-center gap-1.5">
+              <HelpCircle className="h-4 w-4 text-white/50" /> Swipe-Gamble Tutorial
             </h5>
-            <ol className="list-decimal pl-4.5 space-y-1.5 font-mono text-[10px] text-white/50">
-              <li>Configure your active Bet multiplier inside the smartphone console.</li>
-              <li>With <b className="text-pink-400">Swipe-Bet ON</b>, every swipe downwards costs your active bet, but rolls random social payouts instantly.</li>
-              <li>Tap the <b className="text-emerald-400">Interactive Specials Tab</b> inside or on the right panels to scratch cards, flip coins, or crack chests!</li>
+            <ol className="list-decimal pl-4 space-y-2 font-mono text-[10px] text-white/55 leading-relaxed">
+              <li>Configure your active <b className="text-white">Bet Multiplier</b> under the phone frame screen.</li>
+              <li>With <b className="text-pink-400">Swipe-Gamble active</b>, every scroll vertical gesture or touch drag deducts your bet and spins the 3-reel slots instantly!</li>
+              <li>Tap the orange <b className="text-yellow-400">🚀 GAMBLE</b> button inside the phone feed to trigger this creator's special interactive bonus mini-game on-demand!</li>
             </ol>
+            <p className="text-[9px] font-mono text-amber-400 border border-amber-500/20 bg-amber-500/5 p-2 rounded leading-snug">
+              ⚠️ Upgrades in the store directly increase your scroll luck and multiplier factors!
+            </p>
           </div>
+
+          <button 
+            onClick={handleResetGame}
+            className="w-full font-mono text-[10px] text-white/40 hover:text-rose-400 transition-all border border-dashed border-white/10 hover:border-rose-500/20 p-2.5 rounded-xl flex items-center justify-center gap-2"
+          >
+            <RotateCcw className="h-3 w-3" /> Reset Account Balance
+          </button>
 
         </div>
 
         {/* ==================================================== */}
-        {/* CENTER COLUMN: THE SMARTPHONE FEED VIEWPORT (Lg: Col-4) */}
+        {/* CENTER COLUMN: THE SMARTPHONE FEED VIEWPORT (Lg: Col-span-5) */}
         {/* ==================================================== */}
-        <div id="middle-viewport" className="lg:col-span-4 flex flex-col items-center">
+        <div id="middle-viewport" className="lg:col-span-5 flex flex-col items-center">
           
-          {/* Aesthetic smartphone shell frame */}
-          <div className="w-full max-w-[360px] h-[640px] backdrop-blur-xl bg-slate-950/65 rounded-[36px] p-3 border-4 border-white/10 shadow-2xl relative flex flex-col overflow-hidden">
+          {/* Smartphone mockup frame matching responsive scale */}
+          <div className="w-full max-w-[365px] h-[645px] backdrop-blur-2xl bg-zinc-950 rounded-[44px] p-2.5 border-[5.5px] border-white/15 shadow-2xl relative flex flex-col overflow-hidden">
             
-            {/* Top Phone speaker band */}
-            <div className="absolute top-2 left-1/2 -translate-x-1/2 w-28 h-4.5 bg-white/10 backdrop-blur-md rounded-full z-30 flex items-center justify-center border border-white/10">
-              <div className="w-12 h-1 bg-black/60 rounded-full" />
+            {/* Top Speaker phone notch */}
+            <div className="absolute top-2 left-1/2 -translate-x-1/2 w-28 h-5 bg-black rounded-full z-40 flex items-center justify-center border border-white/5">
+              <div className="w-12 h-1 bg-zinc-800 rounded-full" />
             </div>
 
-            {/* Inner viewport shell containing active reel */}
+            {/* Inner viewport smartphone shell */}
             <div 
-              className="flex-1 rounded-[26px] overflow-hidden bg-black relative flex flex-col select-none border border-white/5"
+              className="flex-1 rounded-[34px] overflow-hidden bg-black relative flex flex-col select-none border border-white/5 cursor-grab active:cursor-grabbing"
               onTouchStart={handleTouchStart}
               onTouchEnd={handleTouchEnd}
+              onMouseDown={handleMouseDown}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseLeave}
+              onWheel={handleWheel}
             >
-              {/* Dynamic canvas video loop player matching the current visual style */}
+              {/* Active animated reel player component */}
               <ReelPlayer reel={currentReel} isActive={true} />
 
-              {/* Float Money texts notifications rendering */}
+              {/* Floating Money Text Popup effects */}
               {floatingText.map((f) => (
                 <div
                   key={f.id}
-                  className="absolute pointer-events-none text-xs font-mono font-black text-amber-400 p-1.5 bg-black/75 rounded border border-amber-500/20 animate-bounce shadow-lg z-40 transition-all duration-1000"
+                  className="absolute pointer-events-none text-[10px] font-mono font-black text-amber-300 py-1 px-2.5 bg-black/85 rounded-full border border-amber-400/30 animate-bounce shadow-xl z-40"
                   style={{ left: `${f.x}%`, top: `${f.y}%` }}
                 >
                   ✨ {f.text}
                 </div>
               ))}
 
-              {/* Black overlay header band with info */}
-              <div className="absolute top-0 inset-x-0 h-16 bg-gradient-to-b from-black/80 to-transparent z-20 pt-5 px-4 flex items-center justify-between">
+              {/* Top Swipe Gamble Spin outcome pill / Ticker */}
+              <div className="absolute top-14 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center pointer-events-none w-[90%] font-mono">
+                {swipeSpinActive ? (
+                  <div className="w-full backdrop-blur-md bg-black/85 border border-white/15 py-1 px-2.5 rounded-full shadow-lg flex items-center justify-between text-[11px] h-9 animate-bounce">
+                    <span className="text-[9px] text-white/55 font-bold uppercase tracking-wider shrink-0">🎰 swipe:</span>
+                    <div className="flex gap-1.5 items-center justify-center flex-1">
+                      {swipeReelsSymbols.map((sym, i) => (
+                        <span key={i} className="text-sm bg-white/5 px-2 py-0.5 rounded border border-white/5 animate-pulse">
+                          {sym}
+                        </span>
+                      ))}
+                    </div>
+                    {swipeSpinPayout !== null && (
+                      <span className={`text-[10px] font-black shrink-0 ${swipeSpinPayout > 0 ? 'text-amber-400' : 'text-white/40'}`}>
+                        {swipeSpinPayout > 0 ? `+$${swipeSpinPayout} (${swipeSpinMulti}x)` : 'BUST'}
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <div className="px-3 py-1 rounded-full bg-black/50 backdrop-blur-md border border-white/5 text-[9px] text-white/50 flex items-center gap-1.5 shadow-md">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                    <span>Swipe feed to Gamble Active Bet (${activeBet})</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Black gradient overlay band with info */}
+              <div className="absolute top-0 inset-x-0 h-16 bg-gradient-to-b from-black/80 to-transparent z-20 pt-5 px-4 flex items-center justify-between pointer-events-none">
                 <div className="flex items-center gap-1.5 text-white/50 text-[10px] font-mono">
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping" />
-                  <span>SWIPE FEEDS CHANCE: {currentReel.baseMultiplier}x</span>
+                  <span>CHANCE: {currentReel.baseMultiplier}x</span>
                 </div>
-                <div className="bg-black/60 backdrop-blur-md border border-white/10 px-2 py-0.5 rounded text-[10px] font-mono text-pink-400">
-                  REF #00{currentIdx + 1}
+                <div className="bg-black/60 backdrop-blur-md border border-white/10 px-2 py-0.5 rounded text-[9px] font-mono text-pink-400">
+                  REEL {currentIdx + 1}/{reels.length}
                 </div>
               </div>
 
-              {/* OVERLAY: Creator profile card & social details */}
-              <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/95 via-black/50 to-transparent z-20 p-4 pt-14 flex flex-col space-y-2.5">
+              {/* OVERLAY: Creator info section at base */}
+              <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/95 via-black/60 to-transparent z-20 p-4 pt-12 flex flex-col space-y-2 font-sans pointer-events-none">
                 
                 {/* Username sound layout */}
                 <div className="flex items-center gap-2">
                   <img 
                     src={currentReel.avatar} 
                     alt={currentReel.username} 
-                    className="w-7 h-7 rounded-full border-2 border-white object-cover"
+                    className="w-7 h-7 rounded-full border-1.5 border-white object-cover"
                   />
                   <div>
-                    <span className="font-bold text-xs text-white flex items-center gap-1">
+                    <span className="font-bold text-xs text-white flex items-center gap-0.5">
                       @{currentReel.username}
-                      <UserCheck className="h-3.5 w-3.5 text-blue-400 fill-blue-500" />
+                      <UserCheck className="h-3.5 w-3.5 text-blue-400 fill-blue-500 shrink-0" />
                     </span>
-                    <span className="text-[8px] text-white/40 block font-mono">Reel Multiplier: {currentReel.baseMultiplier}X</span>
+                    <span className="text-[8px] text-white/40 block font-mono">Channel Multiplier: {currentReel.baseMultiplier}X</span>
                   </div>
                 </div>
 
                 {/* Description Text */}
-                <p className="text-[11px] text-slate-100 leading-relaxed font-sans line-clamp-3">
+                <p className="text-[11px] text-white/80 leading-relaxed font-sans line-clamp-2">
                   {currentReel.description}
                 </p>
 
                 {/* Hashtags list */}
-                <div className="flex gap-1.5 flex-wrap">
+                <div className="flex gap-1 flex-wrap">
                   {currentReel.tags.map((tag) => (
                     <span key={tag} className="text-[9px] font-semibold text-pink-400 font-mono">
                       #{tag}
@@ -675,7 +889,7 @@ export default function App() {
 
                 {/* Active music soundtrack strip */}
                 <div className="flex items-center gap-1 text-[9px] text-emerald-400 font-mono bg-black/40 border border-white/10 p-1.5 rounded backdrop-blur-xs">
-                  <Music className="h-3 w-3 animate-spin duration-3000" />
+                  <Music className="h-3 w-3 animate-spin duration-3000 shrink-0" />
                   <span className="truncate">{currentReel.soundTrack}</span>
                 </div>
 
@@ -687,293 +901,357 @@ export default function App() {
                 {/* Like / Heart lock */}
                 <button 
                   onClick={handleLikeToggle}
-                  className="flex flex-col items-center group active:scale-90 transition-all focus:outline-hidden"
+                  className="flex flex-col items-center group active:scale-90 transition-all focus:outline-hidden cursor-pointer"
                 >
                   <div className={`p-2.5 rounded-full transition-all ${
                     likedReels[currentReel.id] 
-                      ? 'bg-rose-600/20 text-rose-500 border border-rose-500/40' 
-                      : 'bg-black/60 text-white/90 hover:bg-black/80'
+                      ? 'bg-rose-500 md:bg-rose-600/20 text-rose-500 border border-rose-500/40 shadow-md' 
+                      : 'bg-black/60 text-white/95 hover:bg-black/80'
                   }`}>
-                    <Heart className={`h-5 w-5 ${likedReels[currentReel.id] ? 'fill-rose-500' : ''}`} />
+                    <Heart className={`h-5 w-5 ${likedReels[currentReel.id] ? 'fill-white md:fill-rose-500' : ''}`} />
                   </div>
-                  <span className="text-[9px] text-white font-mono mt-0.5">{currentReel.likes.toLocaleString()}</span>
+                  <span className="text-[9px] text-white font-mono mt-1 text-shadow">{currentReel.likes.toLocaleString()}</span>
                 </button>
 
-                {/* Open Comments trigger */}
+                {/* Open Comments slide-up drawer trigger */}
                 <button 
-                  onClick={() => setShowComments(!showComments)}
-                  className="flex flex-col items-center hover:scale-105 active:scale-90 transition-all focus:outline-hidden"
+                  onClick={() => {
+                    playTick(400, 0.05);
+                    setShowCommentsDrawer(true);
+                  }}
+                  className="flex flex-col items-center group active:scale-90 transition-all focus:outline-hidden cursor-pointer"
                 >
-                  <div className={`p-2.5 rounded-full bg-black/60 text-white/90 hover:bg-black/80 ${showComments ? 'border border-pink-500/30 text-pink-400' : ''}`}>
+                  <div className="p-2.5 rounded-full bg-black/60 text-white/95 hover:bg-black/80">
                     <MessageCircle className="h-5 w-5" />
                   </div>
-                  <span className="text-[9px] text-white font-mono mt-0.5">{currentReel.commentsCount}</span>
+                  <span className="text-[9px] text-white font-mono mt-1 text-shadow">{currentReel.commentsCount}</span>
                 </button>
 
-                {/* Play active feature action button */}
-                <span className="h-0.5 bg-slate-800/40 w-full" />
+                {/* Spacer line */}
+                <span className="h-[1px] bg-white/10 w-full" />
 
+                {/* Highlight Special Game launch action button */}
                 <div className="relative group">
                   <div className="absolute -inset-1 rounded-full bg-gradient-to-r from-pink-500 to-amber-500 opacity-60 blur-xs animate-ping" />
                   <button
                     onClick={() => {
-                      spawnFloatingText('💫 Special Payout Loaded!');
-                      playTick(700, 0.1);
+                      playTick(600, 0.1);
+                      setShowSpecialsDrawer(true);
                     }}
-                    className="p-3.5 rounded-full bg-linear-to-tr from-pink-500 to-amber-500 text-slate-950 hover:scale-110 active:scale-90 transition-all flex items-center justify-center font-bold text-lg relative z-10"
+                    className="p-3 bg-linear-to-tr from-pink-500 to-amber-500 text-slate-950 hover:scale-110 active:scale-90 transition-all flex items-center justify-center font-bold text-lg relative z-10 rounded-full cursor-pointer"
                   >
                     🚀
                   </button>
                 </div>
-                <span className="text-[8px] text-center text-amber-300 mt-0.5 font-bold font-mono">GAMBLE</span>
+                <span className="text-[8px] text-center text-amber-300 font-bold font-mono text-shadow">GAMBLE</span>
 
               </div>
 
+              {/* ==================================================== */}
+              {/* IN-PHONE COMPACT DRAWER: COMMENTS FEED */}
+              {/* ==================================================== */}
+              {showCommentsDrawer && (
+                <div className="absolute inset-x-0 bottom-0 top-[28%] backdrop-blur-2xl bg-black/95 rounded-t-[28px] border-t border-white/15 z-40 p-4 flex flex-col space-y-3 shadow-2xl animate-slide-up">
+                  <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                    <span className="font-bold text-xs text-white uppercase tracking-widest font-mono flex items-center gap-1.5">
+                      <MessageCircle className="h-4 w-4 text-pink-400" /> Live Comments ({commentsList.length})
+                    </span>
+                    <button 
+                      onClick={() => setShowCommentsDrawer(false)}
+                      className="text-white/60 hover:text-white font-mono text-xs font-bold px-2 py-1 cursor-pointer"
+                    >
+                      ✕ CLOSE
+                    </button>
+                  </div>
+
+                  {/* Scrollable comments list inside phone */}
+                  <div className="flex-1 overflow-y-auto space-y-2.5 pr-1 customize-scrollbar font-sans select-text">
+                    {commentsList.map((comm) => (
+                      <div key={comm.id} className="flex items-start gap-2 text-[10px] leading-relaxed">
+                        <img 
+                          src={comm.avatar} 
+                          alt={comm.username} 
+                          className="w-4.5 h-4.5 rounded-full object-cover shrink-0 mt-0.5 border border-white/10"
+                        />
+                        <div className="bg-white/5 p-2 rounded-xl flex-1 border border-white/5">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-white/80">@{comm.username}</span>
+                            <span className="text-[8px] text-white/40 font-mono">{comm.time}</span>
+                          </div>
+                          <p className="text-white/70 mt-0.5">{comm.text}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Post comment input box */}
+                  <form onSubmit={handleAddComment} className="flex gap-1.5 border-t border-white/10 pt-2 shrink-0">
+                    <input 
+                      type="text" 
+                      value={newCommentInput}
+                      onChange={(e) => setNewCommentInput(e.target.value)}
+                      placeholder="Type a comment..."
+                      className="flex-grow bg-white/5 border border-white/10 focus:border-white/20 focus:outline-hidden rounded-lg px-2.5 py-1 text-[11px] font-sans text-white/90"
+                    />
+                    <button
+                      type="submit"
+                      className="bg-pink-600 hover:bg-pink-500 text-white font-mono font-bold text-xs px-3 rounded-lg active:scale-95 transition-all cursor-pointer"
+                    >
+                      Send
+                    </button>
+                  </form>
+                </div>
+              )}
+
+              {/* ==================================================== */}
+              {/* IN-PHONE COMPACT DRAWER: ACTIVE INTERACTIVE MATCH */}
+              {/* ==================================================== */}
+              {showSpecialsDrawer && (
+                <div className="absolute inset-x-0 bottom-0 h-[68%] backdrop-blur-2xl bg-black/95 rounded-t-[28px] border-t border-white/15 z-40 p-4 flex flex-col space-y-3 shadow-2xl animate-slide-up select-none overflow-y-auto">
+                  
+                  <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                    <div>
+                      <span className="font-bold text-xs text-yellow-400 uppercase tracking-widest font-mono flex items-center gap-1.5">
+                        <Sparkles className="h-4 w-4" /> REEL BONUS MATCH
+                      </span>
+                      <p className="text-[8px] text-white/50 font-mono uppercase mt-0.5">GAME MODE: {currentReel.specialFeature}</p>
+                    </div>
+                    <button 
+                      onClick={() => setShowSpecialsDrawer(false)}
+                      className="text-white/60 hover:text-white font-mono text-xs font-bold px-2 py-1 cursor-pointer"
+                    >
+                      ✕ CLOSE
+                    </button>
+                  </div>
+
+                  {/* Render Game Inside Drawer */}
+                  <div className="flex-1 flex items-center justify-center py-2 text-xs">
+                    
+                    {currentReel.specialFeature === 'slot' && (
+                      <div className="scale-95 origin-center">
+                        <SlotSpinner 
+                          betValue={activeBet} 
+                          onSpinEnd={handleSlotSpinReturn} 
+                          luckMultiplier={getUpgradeLuck()}
+                        />
+                      </div>
+                    )}
+
+                    {currentReel.specialFeature === 'scratch' && (
+                      <ScratchCard 
+                        prizeText={`$${(activeBet * 8).toLocaleString()}`} 
+                        prizeAmount={8}
+                        onSuccess={handleScratchReturn}
+                        onClose={() => setShowSpecialsDrawer(false)}
+                      />
+                    )}
+
+                    {currentReel.specialFeature === 'loot_box' && (
+                      <div className="w-full bg-white/5 border border-white/10 p-3 rounded-2xl flex flex-col items-center space-y-3.5">
+                        <div className="text-center">
+                          <h4 className="font-mono text-xs font-bold text-red-400 flex items-center gap-1.5 justify-center">
+                            <Gift className="h-4 w-4" /> CHEF'S CUSTOM CHEST
+                          </h4>
+                          <p className="text-[9px] text-white/50">Costs $50 simulated tokens to fracture</p>
+                        </div>
+
+                        <div className={`w-20 h-20 flex items-center justify-center rounded-xl bg-black/40 border-2 border-dashed border-white/15 relative cursor-pointer group hover:border-white/30 transition-all ${lootBoxOpen ? 'animate-bounce' : ''}`}>
+                          {lootReward ? (
+                            <div className="text-center p-1 leading-tight">
+                              <span className="text-amber-400 font-bold block text-[10px]">CLAIMED!</span>
+                              <span className="text-white font-mono text-[9px] block mt-0.5">{lootReward}</span>
+                            </div>
+                          ) : (
+                            <div className="text-center text-4xl select-none group-hover:scale-115 transition-all">
+                              📦
+                            </div>
+                          )}
+                        </div>
+
+                        <button
+                          onClick={executeLootBoxCheck}
+                          disabled={lootBoxOpen && !lootReward}
+                          className="w-full bg-gradient-to-r from-yellow-400 to-orange-500 hover:from-yellow-300 hover:to-orange-400 text-slate-950 font-mono font-bold text-xs py-2 px-3 rounded-xl shadow-lg active:scale-95 transition-all cursor-pointer"
+                        >
+                          {lootReward ? '📦 OPENED' : '🔑 CRACK CHEST ($50)'}
+                        </button>
+                      </div>
+                    )}
+
+                    {currentReel.specialFeature === 'double' && (
+                      <div className="w-full bg-white/5 border border-white/10 p-3.5 rounded-2xl flex flex-col space-y-3">
+                        <div className="text-center">
+                          <h3 className="font-mono text-xs font-bold text-amber-300 flex items-center justify-center gap-1.5">
+                            🪙 DOUBLE OR NOTHING COIN
+                          </h3>
+                          <p className="text-[9px] text-white/50">Wager active bet to claim double reward scalar</p>
+                        </div>
+
+                        <div className="flex justify-center py-1">
+                          <div className={`w-16 h-16 rounded-full border-4 flex items-center justify-center text-sm font-black font-mono transition-all duration-300 relative overflow-hidden ${
+                            tossingCoin 
+                              ? 'animate-spin border-amber-500 bg-amber-950/20' 
+                              : 'border-white/15 bg-black/30 text-amber-300 shadow-md'
+                          }`}>
+                            {coinSide ? (coinSide === 'heads' ? '🦅 HEAD' : '🪙 TAIL') : '🏆'}
+                          </div>
+                        </div>
+
+                        {doubleStatus && (
+                          <p className="text-[8px] font-mono p-1 rounded bg-black/40 text-center text-amber-300 border border-white/5 leading-snug">
+                            {doubleStatus}
+                          </p>
+                        )}
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            onClick={() => handleCoinToss('heads')}
+                            disabled={tossingCoin}
+                            className="bg-white/10 hover:bg-white/15 border border-white/15 text-white font-mono font-bold text-[10px] py-1.5 px-2 rounded-lg transition-all cursor-pointer"
+                          >
+                            🦅 HEADS
+                          </button>
+                          <button
+                            onClick={() => handleCoinToss('tails')}
+                            disabled={tossingCoin}
+                            className="bg-white/10 hover:bg-white/15 border border-white/15 text-white font-mono font-bold text-[10px] py-1.5 px-2 rounded-lg transition-all cursor-pointer"
+                          >
+                            🪙 TAILS
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                  </div>
+
+                </div>
+              )}
+
             </div>
 
-            {/* Bottom Phone controls bar: Betting HUD adjustments */}
-            <div className="h-16 shrink-0 mt-3 pt-1 border-t border-white/10 flex items-center justify-between px-2 text-xs font-mono">
+            {/* Bottom Phone Console bar: Bet Adjustments */}
+            <div className="h-14 shrink-0 mt-2 pl-2 pr-2.5 flex items-center justify-between text-xs font-mono select-none">
+              
+              {/* Bet adjuster */}
               <div>
-                <span className="text-[8px] text-white/50 block font-mono">Bet Per Swipe</span>
-                <div className="flex items-center gap-1.5 mt-0.5 bg-black/40 rounded border border-white/10 p-1">
+                <span className="text-[8px] text-white/40 block font-mono">BET VALUE</span>
+                <div className="flex items-center gap-1.5 mt-0.5 bg-black/50 border border-white/10 rounded-lg p-0.5">
                   <button 
                     onClick={() => {
                       playTick(300, 0.05);
                       setActiveBet(prev => Math.max(5, prev - 5));
                     }}
-                    className="text-white/60 hover:text-white shrink-0 font-bold px-1"
+                    className="text-white/40 hover:text-white shrink-0 font-bold px-1.5 py-0.5 cursor-pointer"
                   >
                     -
                   </button>
-                  <span className="text-white font-bold text-[10px] w-9 text-center">${activeBet}</span>
+                  <span className="text-white font-mono font-black text-[10px] w-8 text-center shrink-0">
+                    ${activeBet}
+                  </span>
                   <button 
                     onClick={() => {
                       playTick(450, 0.05);
                       setActiveBet(prev => Math.min(getUpgradeBetLimit(), prev + 5));
                     }}
-                    className="text-white/60 hover:text-white shrink-0 font-bold px-1"
+                    className="text-white/40 hover:text-white shrink-0 font-bold px-1.5 py-0.5 cursor-pointer"
                   >
                     +
                   </button>
                 </div>
               </div>
 
-              {/* Swipe-Bet active toggle checklist */}
-              <div className="text-right">
-                <span className="text-[8px] text-white/50 block font-mono">Swipe-Gamble</span>
+              {/* Swipe bet toggle */}
+              <div className="text-right flex flex-col items-end">
+                <span className="text-[8px] text-white/40 block font-mono">SWIPE-BET</span>
                 <button
-                  onClick={() => setBetFeePerSwipe(!betFeePerSwipe)}
-                  className={`mt-1 font-bold text-[9px] py-1 px-2.5 rounded transition-all flex items-center gap-1 border ${
+                  onClick={() => {
+                    playTick(400, 0.05);
+                    setBetFeePerSwipe(!betFeePerSwipe);
+                  }}
+                  className={`mt-1 text-[9px] py-1 px-2.5 rounded-lg border font-bold transition-all cursor-pointer ${
                     betFeePerSwipe
-                      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/35'
-                      : 'bg-rose-500/10 text-rose-400 border-rose-500/35'
+                      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
+                      : 'bg-rose-500/15 text-rose-400 border-rose-500/20'
                   }`}
                 >
-                  <span>{betFeePerSwipe ? '🟢 ACTIVE' : '🔴 MUTED'}</span>
+                  {betFeePerSwipe ? '🟢 ACTIVE' : '🔴 MUTED'}
                 </button>
               </div>
-            </div>
 
-            {/* Quick manual navigation arrows */}
-            <div className="absolute left-4.5 bottom-1/2 translate-y-1/2 z-30 flex flex-col space-y-1 bg-black/60 rounded-full border border-white/10 p-1">
-              <button 
-                onClick={() => handleScrollReel('up')} 
-                className="p-1.5 text-white/70 hover:text-white hover:bg-white/10 rounded-full transition-all focus:outline-hidden"
-              >
-                <ChevronUp className="h-4 w-4" />
-              </button>
-              <button 
-                onClick={() => handleScrollReel('down')} 
-                className="p-1.5 text-white/70 hover:text-white hover:bg-white/10 rounded-full transition-all focus:outline-hidden"
-              >
-                <ChevronDown className="h-4 w-4" />
-              </button>
             </div>
 
           </div>
+
+          {/* Prompt banner under the smartphone frame */}
+          <p className="mt-3 text-[10px] text-white/40 font-mono text-center leading-relaxed">
+            💡 Drag & pull vertical OR wheel scroll the phone feed to gamble and change channels!
+          </p>
+
         </div>
 
         {/* ==================================================== */}
-        {/* RIGHT COLUMN: THE ACTIVE GAMBLING HUB & EVENTS (Lg: Col-4) */}
+        {/* RIGHT COLUMN: THE COMPACT UPGRADES ENGINE (Lg: Col-span-4) */}
         {/* ==================================================== */}
-        <div id="right-specials-sidebar" className="lg:col-span-4 flex flex-col space-y-6">
+        <div id="right-specials-sidebar" className="col-span-1 md:col-span-1 lg:col-span-4 flex flex-col space-y-6">
           
-          {/* Headline interactive event category */}
-          <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex flex-col space-y-3.5 shadow-md">
-            
-            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+          {/* Shop upgrades list */}
+          <ShopPanel 
+            items={shopUpgrades} 
+            userBalance={stats.balance} 
+            onPurchase={handleUpgradePurchase} 
+          />
+
+          {/* Symmetrical High Rollers standings leaderboard (Aesthetic simulation) */}
+          <div className="backdrop-blur-xl bg-white/5 border border-white/10 p-4 rounded-2xl shadow-2xl space-y-3.5">
+            <div className="flex items-center justify-between border-b border-white/15 pb-2.5">
               <div>
-                <h3 className="font-bold text-sm text-amber-400 uppercase tracking-wider font-mono flex items-center gap-1.5">
-                  <Sparkles className="h-4 w-4" /> INTERACTIVE MINI-GAME
-                </h3>
-                <p className="text-[10px] text-slate-400 font-mono">MATCHES THIS CREATOR\'S REEL TYPE</p>
+                <h4 className="font-mono text-xs font-bold text-amber-400 flex items-center gap-1.5">
+                  🏆 HIGH ROLLERS FEED
+                </h4>
+                <p className="text-[8px] text-white/40 font-mono">Simulated global jackpot transmissions</p>
               </div>
-              <span className="text-[10px] bg-amber-500/10 text-amber-400 font-mono py-0.5 px-2 rounded border border-amber-500/20">
-                ACTIVE FEATURE
-              </span>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
             </div>
 
-            {/* RENDER SPECIFIC INTERACTIVE SLOT CARD OVERLAY */}
-            <div className="flex justify-center py-2">
-              {currentReel.specialFeature === 'slot' && (
-                <SlotSpinner 
-                  betValue={activeBet} 
-                  onSpinEnd={handleSlotSpinReturn} 
-                  luckMultiplier={getUpgradeLuck()}
-                />
-              )}
-
-              {currentReel.specialFeature === 'scratch' && (
-                <ScratchCard 
-                  prizeText={`$${(activeBet * 8).toLocaleString()}`} 
-                  prizeAmount={8} // 8x base multiplier payout
-                  onSuccess={handleScratchReturn}
-                  onClose={() => handleScrollReel('down')}
-                />
-              )}
-
-              {currentReel.specialFeature === 'loot_box' && (
-                <div className="w-full bg-black/40 border border-white/10 p-4 rounded-xl flex flex-col items-center space-y-3 shadow-md">
-                  <div className="text-center">
-                    <h4 className="font-mono text-xs font-bold text-red-400 flex items-center gap-1.5 justify-center">
-                      <Gift className="h-4 w-4" /> CHEF'S LUXURY CHEST
-                    </h4>
-                    <p className="text-[10px] text-white/50">Costs $50 simulated token to crack the seal</p>
-                  </div>
-
-                  <div className={`w-32 h-32 flex items-center justify-center rounded-xl bg-black/50 border-2 border-dashed border-white/20 relative cursor-pointer group hover:border-white/40 transition-all ${lootBoxOpen ? 'animate-bounce' : ''}`}>
-                    {lootReward ? (
-                      <div className="text-center p-2 animate-pulse leading-snug">
-                        <span className="text-amber-400 font-bold block text-sm">CLAIMED!</span>
-                        <span className="text-white font-mono text-xs block mt-1">{lootReward}</span>
-                      </div>
-                    ) : (
-                      <div className="text-center text-4xl group-hover:scale-110 transition-all select-none">
-                        📦
-                      </div>
-                    )}
-                  </div>
-
-                  <button
-                    onClick={executeLootBoxCheck}
-                    id="chef-loot-crack-btn"
-                    disabled={lootBoxOpen && !lootReward}
-                    className="w-full bg-gradient-to-r from-yellow-400 to-orange-500 hover:from-yellow-300 hover:to-orange-400 text-slate-950 font-mono font-bold text-xs py-2 px-3 rounded-lg shadow-lg hover:shadow-orange-500/20 active:scale-95 transition-all"
-                  >
-                    {lootReward ? '📦 OPENED' : '🔑 PAY $50 & CRACK CHEST'}
-                  </button>
-                </div>
-              )}
-
-              {currentReel.specialFeature === 'double' && (
-                <div className="w-full bg-black/40 border border-white/10 p-4 rounded-xl flex flex-col space-y-3.5 shadow-md">
-                  <div className="text-center">
-                    <h4 className="font-mono text-xs font-bold text-amber-400 flex items-center justify-center gap-1.5">
-                      🪙 DOUBLE OR NOTHING COIN TOSS
-                    </h4>
-                    <p className="text-[10px] text-white/50">Risk active bet value to earn duplicate multipliers</p>
-                  </div>
-
-                  {/* Coin toss animation grid */}
-                  <div className="flex justify-center py-2.5">
-                    <div className={`w-20 h-20 rounded-full border-4 flex items-center justify-center text-2xl font-black font-mono transition-all duration-300 relative overflow-hidden ${
-                      tossingCoin 
-                        ? 'animate-spin border-amber-500 bg-amber-950/20' 
-                        : 'border-white/15 bg-black/30 text-amber-300 shadow-md'
-                    }`}>
-                      {coinSide ? (coinSide === 'heads' ? '🦅 HEAD' : '🪙 TAIL') : '🏆'}
-                    </div>
-                  </div>
-
-                  {doubleStatus && (
-                    <p className="text-[10px] font-mono p-1 rounded bg-black/40 text-center text-amber-300 border border-white/5 animate-pulse">
-                      {doubleStatus}
-                    </p>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      onClick={() => handleCoinToss('heads')}
-                      id="coin-heads-btn"
-                      disabled={tossingCoin}
-                      className="bg-white/10 hover:bg-white/15 border border-white/15 text-white font-mono font-bold text-xs py-2 px-3 rounded-lg transition-all"
-                    >
-                      🦅 HEADS
-                    </button>
-                    <button
-                      onClick={() => handleCoinToss('tails')}
-                      id="coin-tails-btn"
-                      disabled={tossingCoin}
-                      className="bg-white/10 hover:bg-white/15 border border-white/15 text-white font-mono font-bold text-xs py-2 px-3 rounded-lg transition-all"
-                    >
-                      🪙 TAILS
-                    </button>
-                  </div>
-                </div>
-              )}
+            <div className="space-y-2.5 font-mono text-[10px]">
+              <div className="flex items-center justify-between p-2 bg-black/30 border border-white/5 rounded-xl">
+                <span className="text-white/60">👑 slot_wizard_99</span>
+                <span className="text-amber-400 font-bold">+$24,500 <span className="text-[8px] text-white/30">(2m ago)</span></span>
+              </div>
+              <div className="flex items-center justify-between p-2 bg-black/30 border border-white/5 rounded-xl">
+                <span className="text-white/60">👨‍🍳 pizza_gordon</span>
+                <span className="text-emerald-400 font-bold">+$12,000 <span className="text-[8px] text-white/30">(5m ago)</span></span>
+              </div>
+              <div className="flex items-center justify-between p-2 bg-black/30 border border-white/5 rounded-xl">
+                <span className="text-white/60">🚀 lucky_swiper_pro</span>
+                <span className="text-amber-400 font-bold">+$8,500 <span className="text-[8px] text-white/30">(14m ago)</span></span>
+              </div>
+              <div className="flex items-center justify-between p-2 bg-black/30 border border-white/5 rounded-xl">
+                <span className="text-white/60">🐵 ape_hodler</span>
+                <span className="text-emerald-400 font-bold">+$35,000 <span className="text-[8px] text-white/30">(20m ago)</span></span>
+              </div>
             </div>
-
-          </div>
-
-          {/* SIMULATED LIVE SOCIAL MEDIA COMMENT SECTION */}
-          <div className="backdrop-blur-xl bg-white/5 border border-white/10 p-4 rounded-2xl flex flex-col space-y-3 flex-1 min-h-[250px] shadow-2xl">
-            <div className="flex items-center justify-between border-b border-white/10 pb-2">
-              <span className="font-bold text-xs text-white uppercase tracking-widest font-mono flex items-center gap-1.5">
-                <MessageCircle className="h-4 w-4 text-pink-400" /> Live Comments ({commentsList.length})
-              </span>
-              <button 
-                onClick={() => setCommentsList(MOCK_REEL_COMMENTS[currentReel.id] || [])}
-                id="comment-reset-btn"
-                className="text-white/40 hover:text-white/70 transition-all font-mono text-[9px] flex items-center gap-1"
-              >
-                <RotateCcw className="h-2.5 w-2.5" /> Reload
-              </button>
-            </div>
-
-            {/* Scrollable comment list */}
-            <div className="flex-1 overflow-y-auto max-h-[220px] space-y-3 pr-1 customize-scrollbar">
-              {commentsList.map((comm) => (
-                <div key={comm.id} id={`comment-node-${comm.id}`} className="flex items-start gap-2 text-[11px] leading-relaxed">
-                  <img 
-                    src={comm.avatar} 
-                    alt={comm.username} 
-                    className="w-5 h-5 rounded-full object-cover shrink-0 mt-0.5 border border-white/10"
-                  />
-                  <div className="bg-black/40 p-2 rounded-xl flex-1 border border-white/5">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-white/90">@{comm.username}</span>
-                      <span className="text-[9px] text-white/40 font-mono">{comm.time}</span>
-                    </div>
-                    <p className="text-white/75 mt-1">{comm.text}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Post new comment form */}
-            <form onSubmit={handleAddComment} className="flex gap-2 border-t border-white/10 pt-2 shrink-0">
-              <input 
-                type="text" 
-                value={newCommentInput}
-                onChange={(e) => setNewCommentInput(e.target.value)}
-                placeholder="Type a comment or question..."
-                id="comment-input-field"
-                className="flex-grow bg-black/40 border border-white/10 focus:border-white/20 focus:outline-hidden rounded-lg px-2.5 py-1.5 text-xs font-sans text-white/90 h-9"
-              />
-              <button
-                type="submit"
-                id="comment-submit-btn"
-                className="bg-pink-600 hover:bg-pink-500 text-white font-mono font-bold text-xs px-3 rounded-lg h-9 active:scale-95 transition-all shrink-0"
-              >
-                Send
-              </button>
-            </form>
-
           </div>
 
         </div>
 
-      </div>
+      </main>
+
+      {/* ==================================================== */}
+      {/* FOOTER: THE SMARTPHONE FOOTER OR WEB FOOTER LINKS */}
+      {/* ==================================================== */}
+      <footer className="h-16 shrink-0 mt-8 border-t border-white/10 bg-black/40 backdrop-blur-2xl px-6 md:px-12 flex items-center justify-between text-[10px] font-mono text-white/40">
+        <div>
+          <span>© 2026 LootReel Inc. All fictional stakes verified offshore.</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="hover:text-white transition-all cursor-pointer">PROVIDENCE</span>
+          <span>•</span>
+          <span className="hover:text-white transition-all cursor-pointer">SEC LICENSE</span>
+          <span>•</span>
+          <span className="hover:text-white transition-all cursor-pointer">TERMS</span>
+        </div>
+      </footer>
 
     </div>
   );
