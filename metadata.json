@@ -1,0 +1,6 @@
+{
+  "name": "Lucky Reels",
+  "description": "An interactive social video feed simulation where each swipe is a bet! Spin slot machines, scratch lucky cards, unlock content creator passes, and grow your virtual fortune.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
